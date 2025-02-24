@@ -1,68 +1,114 @@
+import os
 import requests
 from telegram import Update
-from telegram.ext import Application, CommandHandler, CallbackContext
+from telegram.ext import Updater, CommandHandler, CallbackContext
 
-# 🔹 CONFIGURACIÓN (Reemplaza con tus datos)
-TELEGRAM_TOKEN = "8094024293:AAEaEYiqQdjIm52ZRnMq8V8OhHbj6291mhk"  # Token del bot de @BotFather
-AMADEUS_API_KEY = "A8XQ2p7Ll8EKGpGBGZAkTX3S4uLAJAMW" # API Key de Amadeus
-AMADEUS_API_SECRET = "O5MpGC6fsor28AdW"  # API Secret de Amadeus
+# API Key de Skyscanner (cámbiala por la tuya)
+SKYSCANNER_API_KEY = "bfea23ac4bmsh13d29d7b00e3c08p185fb9jsn4635ca417000"
+BOT_TOKEN = "8094024293:AAEaEYiqQdjIm52ZRnMq8V8OhHbj6291mhk"
 
-# URLs de la API de Amadeus
-TOKEN_URL = "https://test.api.amadeus.com/v1/security/oauth2/token"
-FLIGHT_SEARCH_URL = "https://test.api.amadeus.com/v2/shopping/flight-offers"
+# Función para buscar vuelos en una fecha específica
+def buscar_vuelo(update: Update, context: CallbackContext):
+    try:
+        if len(context.args) < 3:
+            update.message.reply_text("Uso: /vuelo ORIGEN DESTINO FECHA(YYYY-MM-DD)")
+            return
 
-# 🔹 FUNCIÓN PARA OBTENER TOKEN DE AMADEUS
-def obtener_token():
-    payload = {
-        "grant_type": "client_credentials",
-        "client_id": AMADEUS_API_KEY,
-        "client_secret": AMADEUS_API_SECRET
-    }
-    response = requests.post(TOKEN_URL, data=payload)
-    return response.json().get("access_token")
+        origen, destino, fecha = context.args
+        url = "https://skyscanner44.p.rapidapi.com/search"
 
-# 🔹 FUNCIÓN PARA OBTENER PRECIO DEL VUELO
-def obtener_precio(origen, destino, fecha):
-    token = obtener_token()
-    headers = {"Authorization": f"Bearer {token}"}
-    params = {
-        "originLocationCode": origen,
-        "destinationLocationCode": destino,
-        "departureDate": fecha,
-        "adults": 1,
-        "currencyCode": "EUR",
-        "max": 1
-    }
+        params = {
+            "adults": "1",
+            "origin": origen,
+            "destination": destino,
+            "departureDate": fecha,
+            "currency": "USD"
+        }
 
-    response = requests.get(FLIGHT_SEARCH_URL, headers=headers, params=params)
-    data = response.json()
+        headers = {
+            "X-RapidAPI-Key": SKYSCANNER_API_KEY,
+            "X-RapidAPI-Host": "skyscanner44.p.rapidapi.com"
+        }
 
-    if "data" in data and data["data"]:
-        vuelo = data["data"][0]
-        precio = vuelo["price"]["total"]
-        aerolinea = vuelo["validatingAirlineCodes"][0]
-        return f"✈️ Vuelo más barato de {origen} a {destino} el {fecha}:\n💰 Precio: {precio}€\n🛫 Aerolínea: {aerolinea}"
-    
-    return "❌ No se encontraron vuelos para esa fecha."
+        response = requests.get(url, headers=headers, params=params)
 
-# 🔹 FUNCIÓN PARA RESPONDER EN TELEGRAM
-async def precio(update: Update, context: CallbackContext):
-    if len(context.args) != 3:
-        await update.message.reply_text("✈️ Uso: /precio ORIGEN DESTINO YYYY-MM-DD\nEjemplo: /precio MAD BCN 2024-03-10")
-        return
-    
-    origen, destino, fecha = context.args
-    mensaje = obtener_precio(origen, destino, fecha)
-    await update.message.reply_text(mensaje)
+        if response.status_code == 200:
+            data = response.json()
+            itineraries = data.get("itineraries", [])
 
-# 🔹 CONFIGURAR EL BOT
-def main():
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler("precio", precio))
+            if itineraries:
+                vuelo = itineraries[0]
+                precio = vuelo.get("price", {}).get("formatted", "No disponible")
+                aerolinea = vuelo.get("legs", [{}])[0].get("carriers", {}).get("marketing", [{}])[0].get("name", "Desconocida")
 
-    print("✅ Bot en funcionamiento...")
-    app.run_polling()
+                update.message.reply_text(f"✈️ Vuelo encontrado:\n📌 Aerolínea: {aerolinea}\n💰 Precio: {precio}")
+            else:
+                update.message.reply_text("❌ No se encontraron vuelos para esa fecha.")
 
-# 🔹 INICIAR EL BOT
-if __name__ == "__main__":
-    main()
+        else:
+            update.message.reply_text("❌ Error al buscar vuelos. Intenta más tarde.")
+
+    except Exception as e:
+        update.message.reply_text(f"⚠️ Error interno: {str(e)}")
+
+# Función para buscar vuelos en un mes completo
+def buscar_vuelo_mes(update: Update, context: CallbackContext):
+    try:
+        if len(context.args) < 3:
+            update.message.reply_text("Uso: /mes ORIGEN DESTINO AAAA-MM")
+            return
+
+        origen, destino, mes = context.args
+        url = "https://skyscanner44.p.rapidapi.com/search-month"
+
+        params = {
+            "adults": "1",
+            "origin": origen,
+            "destination": destino,
+            "year": mes.split("-")[0],
+            "month": mes.split("-")[1],
+            "currency": "USD"
+        }
+
+        headers = {
+            "X-RapidAPI-Key": SKYSCANNER_API_KEY,
+            "X-RapidAPI-Host": "skyscanner44.p.rapidapi.com"
+        }
+
+        response = requests.get(url, headers=headers, params=params)
+
+        if response.status_code == 200:
+            data = response.json()
+            vuelos = data.get("bestPrices", [])
+
+            if vuelos:
+                mensaje = "✈️ Mejores precios para el mes:\n"
+                for vuelo in vuelos[:5]:  # Solo los primeros 5 vuelos
+                    fecha = vuelo.get("departureDate", "Desconocida")
+                    precio = vuelo.get("price", {}).get("formatted", "No disponible")
+                    mensaje += f"📅 {fecha} - 💰 {precio}\n"
+                update.message.reply_text(mensaje)
+            else:
+                update.message.reply_text("❌ No se encontraron vuelos en ese mes.")
+
+        else:
+            update.message.reply_text("❌ Error al buscar vuelos. Intenta más tarde.")
+
+    except Exception as e:
+        update.message.reply_text(f"⚠️ Error interno: {str(e)}")
+
+# Función de inicio
+def start(update: Update, context: CallbackContext):
+    update.message.reply_text("Hola! Usa /vuelo ORIGEN DESTINO FECHA o /mes ORIGEN DESTINO AAAA-MM para buscar vuelos.")
+
+# Configurar el bot
+updater = Updater(BOT_TOKEN, use_context=True)
+dp = updater.dispatcher
+
+dp.add_handler(CommandHandler("start", start))
+dp.add_handler(CommandHandler("vuelo", buscar_vuelo))
+dp.add_handler(CommandHandler("mes", buscar_vuelo_mes))  # Nuevo comando para búsqueda mensual
+
+# Iniciar el bot
+updater.start_polling()
+updater.idle()
